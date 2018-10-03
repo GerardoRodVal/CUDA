@@ -59,14 +59,35 @@ def Xcorrshift( s1, s2 ):
     for k in range(nx-1):
         scal[k+1] = scal[k] + s2s2[n1 + k] - s2s2[k]
 
-    #scal = sqrt(scal) * np.linalg.norm(s1)
-    a =  array(list(map(sqrt, scal)))
-    scal = a * array( np.linalg.norm(s1))
+    scal = np.sqrt(scal) * array( np.linalg.norm(s1) )
 
     xcor = array(xcor) / array(scal)
 
 # ----------------------------------- optimal lag index (=delay+1) -----------------------------------------------------
 
+    xcor = list(xcor)
+    if( only_pos == 0 ):
+        maxc = max( xcor )
+        maxi = xcor.index( maxc )
+    else:
+        maxc = max(abs(xcor))
+        maxi = xcor.index( maxc )
+
+    maxi = maxi + win[1]-1
+    maxc = xcor[maxi]
+
+# -------------------------------------------------- sub-sample precision ----------------------------------------------
+
+    if( maxi > 1 and maxi < nx-1 ):
+        xc1 = (0.5)*(xcor[maxi+1]-xcor[maxi-1])
+        xc2 = (xcor[maxi-1]) - (2*xcor[maxi]+xcor[maxi+1] )
+        maxi = maxi-xc1/xc2
+        maxc = maxc - 0.5*xc1*xc1/xc2
+
+# -------------------------------------------------- lag --> delay -----------------------------------------------------
+
+    dsamp = maxi-1
+    print(dsamp)
 
 # ----------------------------------------------------- plot -----------------------------------------------------------
     plt.subplot(4,1,1)
