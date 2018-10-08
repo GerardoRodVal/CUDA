@@ -6,14 +6,80 @@
 #include <unistd.h>
 #include <cuda.h>
 #include <cufft.h>
+#include <math.h>
 extern "C" 
 {
 	#include <sacio.h>
 	#include <sac.h>
 }
 
+//#define DATASIZE 8
+//#define BATCH 3
+#define GRID_DIMENSION  3
+#define BLOCK_DIMENSION 3
+
 #define MAX 60001
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+
+
+__global__ void GPUmemo( float *data, int pts )
+{
+	__shared__ float* trace;
+
+	trace = (float *)malloc(pts*sizeof(float));
+	int Blocks;
+	for( Blocks = 0; Blocks < gridDim.x; Blocks++ )
+	{
+		trace[threadIdx.x] = data[threadIdx.x + Blocks*pts];
+	}
+}
+
+
+__global__ void ComplexConj( long int nelem, cufftComplex *array )
+{
+	int bx = blockIdx.x;
+	int by = blockIdx.y;
+	int bz = blockIdx.z;
+
+	int thx = threadIdx.x;
+	int thy = threadIdx.y;
+	int thz = threadIdx.z;
+
+	int NumThread = blockDim.x*blockDim.y*blockDim.z;
+	int idThread  = (thx + thy*blockDim.x) + thz*(blockDim.x*blockDim.y);
+	int BlockId   = (bx + by*gridDim.x) + bz*(gridDim.x*gridDim.y);
+
+	int uniqueid  = idThread + NumThread*BlockId;
+
+	if (uniqueid < nelem){
+		array[uniqueid].y = array[uniqueid].y*-1;
+ 	 }
+}
+
+
+void ComplexGraph( cufftComplex *data, int size_fft)
+{
+	FILE *file;
+	char filename[] = "ComplexData.dat";
+	file = fopen(filename, "w");
+	int l;
+	for( l = 0; l<size_fft; l++ )
+		fprintf(file, "%f    %f\n", data[l].x, data[l].y);
+
+	FILE *gnuplot = NULL;
+	gnuplot=popen("gnuplot","w");
+	fprintf(gnuplot,"set term postscript eps enhanced color\n");
+	fprintf(gnuplot, "set logscale xz\n");
+	fprintf(gnuplot, "set output 'graphic_Complex.eps'\n");
+	fprintf(gnuplot, "plot '%s' u 2 with lines\n", filename);
+	fprintf(gnuplot, "set output\n");
+	fflush(gnuplot);
+	pclose(gnuplot);
+	fclose(file);
+
+}
+
+
 
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
 {
@@ -23,6 +89,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
       if (abort) exit(code);
    }
 }
+
 
 
 void check_gpu_card_type()
@@ -43,21 +110,6 @@ void check_gpu_card_type()
     printf("  Memory Bus Width (bits): %d\n",            prop.memoryBusWidth);
     printf("  Peak Memory Bandwidth (GB/s): %f\n\n", 2.0*prop.memoryClockRate*(prop.memoryBusWidth/8)/1.0e6);
   }
-}
-
-
-
-
-__global__ void GPUmemo( float *data, int pts )
-{
-	__shared__ float* trace;
-
-	trace = (float *)malloc(pts*sizeof(float));
-	int Blocks;
-	for( Blocks = 0; Blocks < gridDim.x; Blocks++ )
-	{
-		trace[threadIdx.x] = data[threadIdx.x + Blocks*pts];
-	}
 }
 
 
@@ -87,7 +139,6 @@ void Fourier( cufftComplex *fft, int batch, int size_fft )
 void Spect( int N )
 {
 	FILE   *gnuplot = NULL;
-	//char fft_file[] = "output_.dat";
 	char fft_file[] = "Array_.dat";
 	gnuplot=popen("gnuplot","w");
 	fprintf(gnuplot,"set term postscript eps enhanced color\n");
@@ -98,6 +149,13 @@ void Spect( int N )
                 fprintf(gnuplot, "set logscale xz\n");
                 fprintf(gnuplot, "set output 'graphics_fft_%i.eps'\n", i);
                 fprintf(gnuplot, "plot '%s' u :(log($3)) with lines\n", fft_file);
+                fprintf(gnuplot, "set output\n");
+                fflush(gnuplot);
+
+                fft_file[5] = i + '0';
+                fprintf(gnuplot, "set logscale xz\n");
+                fprintf(gnuplot, "set output 'graphics_%i.eps'\n", i);
+                fprintf(gnuplot, "plot '%s' u :3 with lines\n", fft_file);
                 fprintf(gnuplot, "set output\n");
                 fflush(gnuplot);
     }
@@ -118,6 +176,7 @@ int main(int argc, char **argv)
 	data = (float *)malloc( 20*MAX*sizeof(float));	
 
 	check_gpu_card_type();
+
 // reading sac files
 	struct dirent *de;  
 	DIR *dr = opendir(".");								//open currently directory
@@ -138,14 +197,6 @@ int main(int argc, char **argv)
 			count ++;
 		}
 	}
-
-	
-//-------------------------------------------------------------------------------------------------	
-/*	FILE *fileMat;
-	fileMat = fopen("data.dat","w");
-	for (int j = 0; j < 20*MAX; j++)
-		fprintf(fileMat,"%f\n",data[j]);
-*/
 
 // --------------------------------------cuda_fft---------------------------------------------------
 	cufftHandle plan;							// settings plan to fft
@@ -170,33 +221,71 @@ int main(int argc, char **argv)
 	cufftPlanMany(&plan, rank, n, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batch);
 	cufftExecR2C(plan, dev_dat, data_fft);
 
-	gpuErrchk(cudaMemcpy(outfft, data_fft, size_fft*count*sizeof(cufftComplex), cudaMemcpyDeviceToHost));
+//------------------------------------Complex conjugate--------------------------------------------------------
+	int grid_size  = GRID_DIMENSION;
+    int block_size = BLOCK_DIMENSION;
 
-	
+    dim3 DimGrid(grid_size, grid_size, grid_size);
+    dim3 DimBlock(block_size, block_size, block_size);
 
-	printf(" ********** CONFG *********\n");
-  	printf(" rank     = %d\n", rank       );
-  	printf(" n[0]     = %d\n", n[0]       );
-  	printf(" inembed  = %d\n", inembed[0] );
-  	printf(" istride  = %d\n", istride    );
-  	printf(" onembed  = %d\n", onembed[0] );
-  	printf(" ostride  = %d\n", ostride    );
-  	printf(" odist    = %d\n", odist      );
-  	printf(" batch    = %d\n", batch      );
-  	printf(" count    = %d\n", count      );
-	printf(" size_fft = %d\n", size_fft   );
-  	printf(" **************************\n");
+    cufftHandle handle;
 
-	//printf(" %i %i\n",  outfft[0].x, outfft[0].y );
-	Fourier(outfft, batch, size_fft);
+    cufftReal *ComCon_d;
+	//cufftReal *ComCon_h;
+	cufftComplex *ComCon_dO;
+	cufftComplex *ComCon_hO; 
+	cufftComplex *fft_conj;
+
+	//ComCon_h = (cufftReal*)malloc(nlen*count*sizeof(cufftReal));
+	ComCon_hO = (cufftComplex*)malloc((nlen) * count * sizeof(cufftComplex));
+	cudaMalloc((void**)&ComCon_d, nlen*count*sizeof(cufftReal));
+	cudaMalloc((void**)&ComCon_dO, (nlen) * count * sizeof(cufftComplex));
+    cudaMalloc((void**)&fft_conj, (nlen) * count * sizeof(cufftComplex));
+
+/*    for (int i=0; i<BATCH; i++)
+        for (int j=0; j<DATASIZE; j++){ 
+		ComCon_h[i*DATASIZE + j] = (cufftReal)((i + 1) + j);
+	//	printf("ComCon_h[%d]=%f\n",i*DATASIZE + j, ComCon_h[i*DATASIZE + j]);
+	}
+*/
+	cudaMemcpy(ComCon_d, data_fft, nlen*count*sizeof(cufftReal), cudaMemcpyDeviceToDevice);
+
+    cufftPlanMany(&handle, rank, n, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batch);
+
+	cufftExecR2C(handle, ComCon_d, ComCon_dO);
+	cudaMemcpy(fft_conj, ComCon_dO, (nlen)*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
+
+	ComplexConj<<<DimGrid,DimBlock>>>( (nlen)*count, fft_conj );
+
+	cudaMemcpy(ComCon_hO, fft_conj, (nlen)*count*sizeof(cufftComplex), cudaMemcpyDeviceToHost);
+
+/*
+	for (int i=0; i<BATCH; i++)
+        for (int j=0; j<(DATASIZE / 2 + 1); j++)
+            printf("Batch  = %i j= %i real %f imag %f\n", i, j, ComCon_hO[i*(DATASIZE / 2 + 1) + j].x, ComCon_hO[i*(DATASIZE / 2 + 1) + j].y);
+*/	
+	ComplexGraph( ComCon_hO, size_fft );
+
+	cufftDestroy(handle);
+    gpuErrchk(cudaFree(ComCon_dO));
+    gpuErrchk(cudaFree(ComCon_d));
+    gpuErrchk(cudaFree(fft_conj));
+
+//-------------------------------------------------------------------------------------------------------------
+
+    gpuErrchk(cudaMemcpy(outfft, data_fft, size_fft*count*sizeof(cufftComplex), cudaMemcpyDeviceToHost));
+
+	Fourier( outfft, batch, size_fft );
 	Spect( batch );
 
 	GPUmemo<<<count,nlen>>>( dev_dat, nlen );
+
 
 	cudaFree(dev_dat);
 	cudaFree(data_fft);
 	cufftDestroy(plan);
 	free(data);
+	cudaDeviceSynchronize();
 	cudaDeviceReset();
   	return (EXIT_SUCCESS);
 }
