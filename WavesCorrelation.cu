@@ -56,17 +56,9 @@ void check_gpu_card_type()
 
 __global__ void ComplexConj( long int nelem, cufftComplex *array )
 {
-	int bx = blockIdx.x;
-	int by = blockIdx.y;
-	int bz = blockIdx.z;
-
-	int thx = threadIdx.x;
-	int thy = threadIdx.y;
-	int thz = threadIdx.z;
-
 	int NumThread = blockDim.x*blockDim.y*blockDim.z;
-	int idThread  = (thx + thy*blockDim.x) + thz*(blockDim.x*blockDim.y);
-	int BlockId   = (bx + by*gridDim.x) + bz*(gridDim.x*gridDim.y);
+	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
+	int BlockId   = (blockIdx.x + blockIdx.y*gridDim.x) + blockIdx.z*(gridDim.x*gridDim.y);
 
 	int uniqueid  = idThread + NumThread*BlockId;
 
@@ -76,111 +68,50 @@ __global__ void ComplexConj( long int nelem, cufftComplex *array )
 }
 
 
-
-int NextPower2( unsigned int v )
+__global__ void Vector( cufftComplex *vectorIn, cufftComplex *Output, int inicio, int final, int size)
 {
-	v--;
-	v |= v >> 1;
-	v |= v >> 2;
-	v |= v >> 4;
-	v |= v >> 8;
-	v |= v >> 16;
-	v++;
-	return v;
+	int NumThread = blockDim.x*blockDim.y*blockDim.z;
+	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
+	int BlockId   = (blockIdx.x + blockIdx.y*gridDim.x) + blockIdx.z*(gridDim.x*gridDim.y);
+
+	int uniqueid  = idThread + NumThread*BlockId;
+
+	if( uniqueid >= inicio and uniqueid < final ){
+		Output[uniqueid].x = vectorIn[uniqueid].x;
+		Output[uniqueid].y = vectorIn[uniqueid].y;
+	}
 }
 
-float Maxim( cufftComplex *vector, int size )
+__global__ void Correlate( cufftComplex *s1, cufftComplex *s2, cufftComplex *Output, int xlen )
 {
+	int NumThread = blockDim.x*blockDim.y*blockDim.z;
+	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
+	int BlockId   = (blockIdx.x + blockIdx.y*gridDim.x) + blockIdx.z*(gridDim.x*gridDim.y);
 
-	float *max;
-	max = (float*)malloc(sizeof(float));
+	int uniqueid  = idThread + NumThread*BlockId;
 
-	max[0] = vector[0].x;
-
-	for( int i=1; i<size; i++ ){
-		if( max[0] < vector[i].x )
-			max[0] = vector[i].x;
+	if( uniqueid < xlen ){
+		Output[uniqueid].x = s1[uniqueid].x * s2[uniqueid].x ;
+		Output[uniqueid].y = s1[uniqueid].y * s2[uniqueid].y ;
 	}
-
-	float Output = max[0];
-	//Output = (float*)malloc(sizeof(float));
-
-	//memcpy( Output, &max[0], sizeof(cufftComplex));
-
-	return Output;
-
 }
 
 
-
-cufftComplex *Correlate( cufftComplex *s1, cufftComplex *s2, int xlen, int npts, float dsor )
+__global__ void Div( cufftComplex *Input, cufftComplex *Output, int max, float dsor )
 {
+	int NumThread = blockDim.x*blockDim.y*blockDim.z;
+	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
+	int BlockId   = (blockIdx.x + blockIdx.y*gridDim.x) + blockIdx.z*(gridDim.x*gridDim.y);
 
-	cufftComplex *Input_i;
-	Input_i = (cufftComplex*)malloc( xlen*sizeof(cufftComplex));
+	int uniqueid  = idThread + NumThread*BlockId;
 
-	int i;
-	for( i=0; i<xlen; i++ ){
-		Input_i[i].x = s1[i].x * s2[i].x ;
-		Input_i[i].y = s1[i].y * s2[i].y ;
-	}
-
-	cufftComplex *Output_i;
-	Output_i = (cufftComplex*)malloc( xlen*sizeof(cufftComplex));
-
-	cufftHandle plan_i;							// settings plan to fft
-	cufftComplex *data_fft_i;
-	cufftReal *dev_dat_i;
-
-	int rank_i = -1;                            
-  	int n[] = { xlen };                      
-  	int istride = 1, ostride = 1;            
-  	int idist = xlen, odist = ( xlen / 2 + 1); 
-  	int inembed[] = { 0 };                   
-  	int onembed[] = { 0 };                   
-  	int batch = npts;   
-
-	cudaMalloc((void**)&dev_dat_i,   xlen*sizeof(cufftReal) );
-	cudaMalloc((void**)&data_fft_i,  xlen*sizeof(cufftComplex));
-
-	cudaMemcpy(dev_dat_i, Input_i,   xlen*sizeof(cufftComplex), cudaMemcpyHostToDevice);									
-	cufftPlanMany(&plan_i, rank_i, n, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batch);
-	cufftExecR2C(plan_i, dev_dat_i, data_fft_i);
-
-	gpuErrchk(cudaMemcpy(Output_i, data_fft_i,  xlen*sizeof(cufftComplex), cudaMemcpyDeviceToHost));
-
-	cufftComplex *Output;
-	Output = (cufftComplex*)malloc( xlen*sizeof(cufftComplex));
-
-
-	for( int div=0; div<xlen; div++ ){
-		Output[div].x = Output_i[div].x/dsor;
-		Output[div].y = Output_i[div].y/dsor;
-	}
-
-	cudaFree(dev_dat_i);
-	cudaFree(data_fft_i);
-	cufftDestroy(plan_i);
-
-	return Output;
-
+	if (uniqueid < max){
+		Output[uniqueid].x = Input[uniqueid].x/1024.0  ;
+		Output[uniqueid].y = Input[uniqueid].y/1024.0 ;
+ 	 }
 }
 
 
-cufftComplex *Vector( cufftComplex *vectorIn, int inicio, int final, int size)
-{
-	cufftComplex *Output;
-	Output = (cufftComplex*)malloc(sizeof(cufftComplex)*size);
-
-	int i;
-	int ind = 0;
-	for( i=inicio; i<final; i++ ){
-		Output[ind] = vectorIn[i];
-		ind += 1;
-	}
-
-	return Output;
-}
 
 
 int main(int argc, char **argv) 
@@ -218,18 +149,6 @@ int main(int argc, char **argv)
 		}
 	}
 
-	int n1 = nlen;
-    int n2 = nlen;
-
-    if( n1 > n2 ){
-    	printf( "Reference signal S1 cannot be longer than target S2\n" );
-        exit(0);
-    }
-
-    int nx = n2-n1+1;
-	int nfft;
-    nfft = NextPower2( n2+n1 );
-
 // --------------------------------------cuda_fft---------------------------------------------------
 	cufftHandle plan;							// settings plan to fft
 	cufftComplex *data_fft;
@@ -245,15 +164,17 @@ int main(int argc, char **argv)
   	int size_fft = (nlen );
   	int batch = count;   
 
-	gpuErrchk(cudaMalloc((void**)&dev_dat, MAX*count*sizeof(cufftReal) ));
-	gpuErrchk(cudaMalloc((void**)&data_fft, size_fft*count*sizeof(cufftComplex) ));
-	Out_fft = (cufftComplex*)malloc( size_fft * count * sizeof(cufftComplex));
+	cudaMalloc((void**)&dev_dat,   size_fft*count*sizeof(cufftReal) );
+	cudaMalloc((void**)&data_fft,  size_fft*count*sizeof(cufftComplex) );
+	//Out_fft = (cufftComplex*)malloc( size_fft*count* sizeof(cufftComplex));
+	cudaMalloc((void**)&Out_fft,  size_fft*count*sizeof(cufftComplex) );
+
 	gpuErrchk(cudaMemcpy(dev_dat, data, MAX*count*sizeof(float), cudaMemcpyHostToDevice));
 								
 	cufftPlanMany(&plan, rank, n, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batch);
 	cufftExecR2C(plan, dev_dat, data_fft);
 
-	cudaMemcpy(Out_fft, data_fft, size_fft*count*sizeof(cufftComplex), cudaMemcpyDeviceToHost);
+	cudaMemcpy(Out_fft, data_fft, size_fft*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
 	
 //------------------------------------Complex conjugate--------------------------------------------------------
 	int grid_size  = GRID_DIMENSION;
@@ -266,55 +187,89 @@ int main(int argc, char **argv)
 
     cufftReal *ComCon_d;
 	cufftComplex *ComCon_dO;
-	cufftComplex *Out_conj; 
 	cufftComplex *fft_conj;
+	cufftComplex *Out_conj; 
 
-	Out_conj = (cufftComplex*)malloc(  nlen * count * sizeof(cufftComplex));
-	cudaMalloc((void**)&ComCon_d,      nlen * count * sizeof(cufftReal));
-	cudaMalloc((void**)&ComCon_dO,     nlen * count * sizeof(cufftComplex));
-    cudaMalloc((void**)&fft_conj,      nlen * count * sizeof(cufftComplex));
+	cudaMalloc((void**)&ComCon_d,  nlen * count * sizeof(cufftReal));
+	cudaMalloc((void**)&ComCon_dO, nlen * count * sizeof(cufftComplex));
+    cudaMalloc((void**)&fft_conj,  nlen * count * sizeof(cufftComplex));
+    //Out_conj = (cufftComplex*)malloc( nlen * count * sizeof(cufftComplex));
+    cudaMalloc((void**)&Out_conj,  nlen * count * sizeof(cufftComplex));
 
-	cudaMemcpy(ComCon_d, data_fft,     nlen*count*sizeof(cufftReal), cudaMemcpyDeviceToDevice);
+	cudaMemcpy(ComCon_d, data, nlen*count*sizeof(cufftReal), cudaMemcpyHostToDevice);
 
     cufftPlanMany(&handle, rank, n, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batch);
 
 	cufftExecR2C(handle, ComCon_d, ComCon_dO);
-	cudaMemcpy(fft_conj, ComCon_dO, (nlen)*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
+	cudaMemcpy(fft_conj, ComCon_dO, nlen*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
 
-	ComplexConj<<<DimGrid,DimBlock>>>( (nlen)*count, fft_conj );
+	ComplexConj<<<DimGrid,DimBlock>>>( nlen*count, fft_conj );
 
-	cudaMemcpy(Out_conj, fft_conj, (nlen)*count*sizeof(cufftComplex), cudaMemcpyDeviceToHost);
+	cudaMemcpy(Out_conj, fft_conj, (nlen)*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
 
 //-------------------------------------------- Correlation --------------------------------------------------------
-
+//----------------------------  Variables  ------------------------------
 	cufftComplex *fft_A;
 	cufftComplex *fft_B;
 
-	fft_A = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
-	fft_B = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
-
+	cudaMalloc((void**)&fft_A, MAX * sizeof(cufftComplex));
+	cudaMalloc((void**)&fft_B, MAX * sizeof(cufftComplex));
+	
 	cufftComplex *Con_A;
 	cufftComplex *Con_B;
 
-	Con_A = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
-	Con_B = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
+	cudaMalloc((void**)&Con_A, MAX * sizeof(cufftComplex));
+	cudaMalloc((void**)&Con_B, MAX * sizeof(cufftComplex));
 
 	cufftComplex *Corr_A;
 	cufftComplex *Corr_B;
+	cufftComplex *Corr_AB;
 
-	Corr_A = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
-	Corr_B = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
+	cudaMalloc((void**)&Corr_A, MAX * sizeof(cufftComplex));
+	cudaMalloc((void**)&Corr_B, MAX * sizeof(cufftComplex));
+	cudaMalloc((void**)&Corr_AB, MAX * sizeof(cufftComplex));
 
-	float Power_A;
-	float Power_B;
+	float *Power_A;
+	float *Power_B;
+	float *CC;
 
-	cufftComplex *Correlation;	
-	Correlation = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
+	cudaMalloc((void**)&Power_A, sizeof(float));
+	cudaMalloc((void**)&Power_B, sizeof(float));
+	cudaMalloc((void**)&CC, sizeof(float));
 
-	float Corr_Max;	
-	float res;
 
-	float res1 = (float) batch;
+// --------------------- ifft variables -------------------------------
+
+	cufftHandle plan_i;						
+	cufftComplex *data_fft_i;
+	cufftReal *dev_dat_i;
+
+	int rank_i = -1; 
+	int n_i[] = { MAX };                      
+	int istride_i = 1, ostride_i = 1;   
+	int idist_i = MAX, odist_i = ( MAX / 2 + 1); 
+	int inembed_i[] = { 0 };                   
+	int onembed_i[] = { 0 };                   
+	int batch_i = 1;   
+
+	cudaMalloc((void**)&dev_dat_i,  MAX * sizeof(cufftReal) );
+	cudaMalloc((void**)&data_fft_i, MAX * sizeof(cufftComplex));
+
+	cufftComplex *Output_i;
+	cudaMalloc((void**)&Output_i,   MAX * sizeof(cufftComplex) );
+
+// ----------------------- div variables -----------------------------
+
+	cufftComplex *Input_max;
+	cudaMalloc((void**)&Input_max,  MAX * sizeof(cufftComplex) );
+
+// ----------------------- max variables -----------------------------
+
+	cufftComplex *Input_max_H;
+	Input_max_H = (cufftComplex*)malloc(MAX*sizeof(cufftComplex));
+
+// ----------------------- General variables -------------------------
+
 	int begin = 0;
 	int end = MAX;
 	int foot = MAX;
@@ -323,39 +278,106 @@ int main(int argc, char **argv)
 	FILE *file;
 	char filename[] = "Correlations.dat";
 	file = fopen(filename, "w");
+// ------------------------------------------------------------------
 
-	for( int x=0; x<batch-1; x++ ){
+	cufftComplex *Salida;
+	Salida = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
 
-		fft_A = Vector( Out_fft, begin, end, MAX );
-		Con_A = Vector( Out_conj, begin, end, MAX );
+	for( int A=0; A<count-1; A++ ){
 
-		Corr_A = Correlate(fft_A, Con_A, nlen, batch, res1); 
-		Power_A = Maxim( Corr_A, MAX );
+		Vector<<<DimGrid,DimBlock>>>( Out_fft,  fft_A, begin, end, MAX );																    // define vector
+		Vector<<<DimGrid,DimBlock>>>( Out_conj, Con_A, begin, end, MAX );
 
+		Correlate<<<DimGrid,DimBlock>>>(fft_A, Con_A, Corr_A, nlen ); 																	    // vector element x element
+
+		cudaMemcpy(dev_dat_i, Corr_A,  MAX  * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);												// ifft
+		cufftPlanMany(&plan_i, rank_i, n_i, inembed_i, istride_i, idist_i, onembed_i, ostride_i, odist_i, CUFFT_R2C, batch_i);
+		cufftExecR2C(plan_i, dev_dat_i, data_fft_i);
+		cudaMemcpy(Output_i, data_fft_i, MAX * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
+
+		Div<<<DimGrid,DimBlock>>>( data_fft_i, Input_max, MAX, (float)MAX );																			// div element
+
+		cudaMemcpy( Input_max_H, Input_max, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost ); 
+
+		float maxA;
+		maxA = Input_max_H[0].x;
+
+		for( int i=1; i<MAX; i++ ){
+			if( maxA < Input_max_H[i].x )
+				maxA = Input_max_H[i].x;
+		}
+
+		cudaMemcpy( Power_A, &maxA, sizeof(float), cudaMemcpyHostToDevice);
+
+		printf("%f\n", max);
+
+		
+		cudaMemcpy( Salida, data_fft_i, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
+		for( int it=0; it<500; it++ )
+			printf("%f\n", Salida[it]);
+		
+/*
 		int begin2 =  0 + foot;
 		int end2 = MAX + foot;
 
 		for( int y=0; y<batch-n3; y++ ){
 
-			fft_B = Vector( Out_fft, begin2, end2, MAX );
-			Con_B = Vector( Out_fft, begin2, end2, MAX );
+			Vector<<<DimGrid,DimBlock>>>( Out_fft,  fft_B, begin2, end2, MAX );																    // define vector
+			Vector<<<DimGrid,DimBlock>>>( Out_conj, Con_B, begin2, end2, MAX );
 
-			Corr_B = Correlate( fft_B, Con_B, nlen, batch, res1 ); 
-			Power_B = Maxim( Corr_B, MAX );
+			Correlate<<<DimGrid,DimBlock>>>(fft_B, Con_B, Corr_B, nlen ); 																	    // vector element x element
 
-			res = batch*sqrt(Power_A*Power_B);
-			Correlation = Correlate( fft_A, Con_B, MAX, batch, res ); 
+			cudaMemcpy(dev_dat_i, Corr_B,  MAX  * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);												// ifft
+			cufftPlanMany(&plan_i, rank_i, n_i, inembed_i, istride_i, idist_i, onembed_i, ostride_i, odist_i, CUFFT_R2C, batch_i);
+			cufftExecR2C(plan_i, dev_dat_i, data_fft_i);
+			cudaMemcpy(Output_i, data_fft_i, MAX * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
 
-			Corr_Max = Maxim( Correlation, MAX );
+			Div<<<DimGrid,DimBlock>>>( Output_i, Input_max, MAX, MAX );																			// div element
 
-			//if( Corr_Max > 0.6 )
-			//	fprintf(file, "Waveform1 =     Waveform2 =      CC = %f \n", Corr_Max);
-			printf("Waveform1 =     Waveform2 =      CC = %f \n", Corr_Max);
+			cudaMemcpy( Input_max_H, Input_max, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost ); 
+
+			float maxB;
+			maxB = Input_max_H[0].x;
+
+			for( int i=1; i<MAX; i++ ){
+				if( maxB < Input_max_H[i].x )
+					maxB = Input_max_H[i].x;
+			}
+
+			cudaMemcpy( Power_B, &maxB, sizeof(float), cudaMemcpyHostToDevice);
+
+// ----------------------------------------------- Correlation AB --------------------------------------------------------------
+
+			Correlate<<<DimGrid,DimBlock>>>(fft_A, Con_B, Corr_AB, nlen ); 																	    // vector element x element
+
+			cudaMemcpy(dev_dat_i, Corr_AB,  MAX  * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);												// ifft
+			cufftPlanMany(&plan_i, rank_i, n_i, inembed_i, istride_i, idist_i, onembed_i, ostride_i, odist_i, CUFFT_R2C, batch_i);
+			cufftExecR2C(plan_i, dev_dat_i, data_fft_i);
+			cudaMemcpy(Output_i, data_fft_i, MAX * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
+
+			//float npts = MAX*sqrt(Power_A*Power_B);
+			Div<<<DimGrid,DimBlock>>>( Output_i, Input_max, MAX, MAX );																	   // div element
+
+			cudaMemcpy( Input_max_H, Input_max, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost ); 
+
+			float maxAB;
+			maxAB = Input_max_H[0].x;
+
+			for( int i=1; i<MAX; i++ ){
+				if( maxAB < Input_max_H[i].x )
+					maxAB = Input_max_H[i].x;
+			}
+
+			cudaMemcpy( CC, &maxAB, sizeof(float), cudaMemcpyHostToDevice);
+
+			//if( CC > 0.6 )
+			//	fprintf(file, "Waveform1 =     Waveform2 =      CC = %f \n", CC);
+			printf("%.4f %.4f  %.4f\n", maxA, maxB, maxAB);
 
 			begin2 += MAX;
 			end2 += MAX;
 		}
-
+*/
 		n3 += 1;
 		begin += MAX;
 		end += MAX;
@@ -363,15 +385,23 @@ int main(int argc, char **argv)
 	}
 
 	cufftDestroy(handle);
-	cudaFree(Out_fft);
+	cudaFree(fft_conj);
 	cudaFree(Out_conj);
 	cudaFree(ComCon_dO);
 	cudaFree(ComCon_d);
-	cudaFree(fft_conj);
+
+	cufftDestroy(plan);
+	cudaFree(Out_fft);
 	cudaFree(dev_dat);
 	cudaFree(data_fft);
-	cufftDestroy(plan);
+
+	cufftDestroy(plan_i);
+	cudaFree(Output_i);
+	cudaFree(dev_dat_i);
+	cudaFree(data_fft_i);
+
 	free(data);
+	
 	cudaDeviceSynchronize();
 	cudaDeviceReset();
 	return (EXIT_SUCCESS);
