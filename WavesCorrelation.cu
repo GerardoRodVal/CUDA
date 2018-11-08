@@ -107,7 +107,7 @@ __global__ void Div( cufftComplex *Input, cufftComplex *Output, int max, float d
 
 	if (uniqueid < max){
 		Output[uniqueid].x = Input[uniqueid].x/dsor ;
-		Output[uniqueid].y = Input[uniqueid].y/dsor ;
+		//Output[uniqueid].y = Input[uniqueid].y/dsor ;
  	 }
 }
 
@@ -260,11 +260,6 @@ int main(int argc, char **argv)
 	cufftComplex *Input_max;
 	cudaMalloc((void**)&Input_max,  MAX * sizeof(cufftComplex) );
 
-// ----------------------- max variables -----------------------------
-
-	cufftComplex *Input_max_H;
-	Input_max_H = (cufftComplex*)malloc(MAX*sizeof(cufftComplex));
-
 // ----------------------- General variables -------------------------
 
 	int begin = 0;
@@ -292,24 +287,26 @@ int main(int argc, char **argv)
 		cufftExecR2C(plan_i, dev_dat_i, data_fft_i);
 		cudaMemcpy(Output_i, data_fft_i, MAX * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
 
-		Div<<<DimGrid,DimBlock>>>( data_fft_i, Input_max, MAX, (float)MAX );																			// div element
+		Div<<<DimGrid,DimBlock>>>( Output_i, Input_max, MAX, (float)MAX );																			// div element
 
-		cudaMemcpy( Input_max_H, Input_max, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost ); 
+		cudaMemcpy( Salida, Input_max, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost);
 
-		float maxA;
-		maxA = Input_max_H[0].x;
+		float maxA = 0;
+		int index =  0;
 
 		for( int i=1; i<MAX; i++ ){
-			if( maxA < Input_max_H[i].x )
-				maxA = Input_max_H[i].x;
+			if( Salida[i].x > maxA )
+				maxA = Salida[i].x;
+				index = i;
 		}
 
-		cudaMemcpy( Power_A, &maxA, sizeof(float), cudaMemcpyHostToDevice);
+		printf("Power A: %f   index: %i\n", maxA, index);
 
-		printf("%f\n", max);
+		//cudaMemcpy( Power_A, maxA, sizeof(float), cudaMemcpyHostToDevice);
+
 
 		/*
-		cudaMemcpy( Salida, Input_max_H, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
+		cudaMemcpy( Salida, Corr_A, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
 		for( int it=0; it<500; it++ )
 			printf("%f\n", Salida[it]);
 		*/
