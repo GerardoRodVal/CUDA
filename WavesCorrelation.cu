@@ -106,8 +106,8 @@ __global__ void Div( cufftComplex *Input, cufftComplex *Output, int max, float d
 	int uniqueid  = idThread + NumThread*BlockId;
 
 	if (uniqueid < max){
-		Output[uniqueid].x = Input[uniqueid].x/1024.0  ;
-		Output[uniqueid].y = Input[uniqueid].y/1024.0 ;
+		Output[uniqueid].x = Input[uniqueid].x/dsor ;
+		Output[uniqueid].y = Input[uniqueid].y/dsor ;
  	 }
 }
 
@@ -166,7 +166,6 @@ int main(int argc, char **argv)
 
 	cudaMalloc((void**)&dev_dat,   size_fft*count*sizeof(cufftReal) );
 	cudaMalloc((void**)&data_fft,  size_fft*count*sizeof(cufftComplex) );
-	//Out_fft = (cufftComplex*)malloc( size_fft*count* sizeof(cufftComplex));
 	cudaMalloc((void**)&Out_fft,  size_fft*count*sizeof(cufftComplex) );
 
 	gpuErrchk(cudaMemcpy(dev_dat, data, MAX*count*sizeof(float), cudaMemcpyHostToDevice));
@@ -193,13 +192,11 @@ int main(int argc, char **argv)
 	cudaMalloc((void**)&ComCon_d,  nlen * count * sizeof(cufftReal));
 	cudaMalloc((void**)&ComCon_dO, nlen * count * sizeof(cufftComplex));
     cudaMalloc((void**)&fft_conj,  nlen * count * sizeof(cufftComplex));
-    //Out_conj = (cufftComplex*)malloc( nlen * count * sizeof(cufftComplex));
     cudaMalloc((void**)&Out_conj,  nlen * count * sizeof(cufftComplex));
 
 	cudaMemcpy(ComCon_d, data, nlen*count*sizeof(cufftReal), cudaMemcpyHostToDevice);
 
     cufftPlanMany(&handle, rank, n, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batch);
-
 	cufftExecR2C(handle, ComCon_d, ComCon_dO);
 	cudaMemcpy(fft_conj, ComCon_dO, nlen*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
 
@@ -311,11 +308,11 @@ int main(int argc, char **argv)
 
 		printf("%f\n", max);
 
-		
-		cudaMemcpy( Salida, data_fft_i, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
+		/*
+		cudaMemcpy( Salida, Input_max_H, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
 		for( int it=0; it<500; it++ )
 			printf("%f\n", Salida[it]);
-		
+		*/
 /*
 		int begin2 =  0 + foot;
 		int end2 = MAX + foot;
