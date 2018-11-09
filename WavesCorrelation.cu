@@ -82,7 +82,7 @@ __global__ void Vector( cufftComplex *vectorIn, cufftComplex *Output, int inicio
 	}
 }
 
-__global__ void Correlate( cufftComplex *s1, cufftComplex *s2, cufftComplex *Output, int xlen )
+__global__ void VectorMult( cufftComplex *s1, cufftComplex *s2, cufftComplex *Output, int xlen )
 {
 	int NumThread = blockDim.x*blockDim.y*blockDim.z;
 	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
@@ -222,8 +222,8 @@ int main(int argc, char **argv)
 	cufftComplex *Corr_B;
 	cufftComplex *Corr_AB;
 
-	cudaMalloc((void**)&Corr_A, MAX * sizeof(cufftComplex));
-	cudaMalloc((void**)&Corr_B, MAX * sizeof(cufftComplex));
+	cudaMalloc((void**)&Corr_A,  MAX * sizeof(cufftComplex));
+	cudaMalloc((void**)&Corr_B,  MAX * sizeof(cufftComplex));
 	cudaMalloc((void**)&Corr_AB, MAX * sizeof(cufftComplex));
 
 	float *Power_A;
@@ -233,27 +233,6 @@ int main(int argc, char **argv)
 	cudaMalloc((void**)&Power_A, sizeof(float));
 	cudaMalloc((void**)&Power_B, sizeof(float));
 	cudaMalloc((void**)&CC, sizeof(float));
-
-
-// --------------------- ifft variables -------------------------------
-
-	cufftHandle plan_i;						
-	cufftComplex *data_fft_i;
-	cufftReal *dev_dat_i;
-
-	int rank_i = -1; 
-	int n_i[] = { MAX };                      
-	int istride_i = 1, ostride_i = 1;   
-	int idist_i = MAX, odist_i = ( MAX / 2 + 1); 
-	int inembed_i[] = { 0 };                   
-	int onembed_i[] = { 0 };                   
-	int batch_i = 1;   
-
-	cudaMalloc((void**)&dev_dat_i,  MAX * sizeof(cufftReal) );
-	cudaMalloc((void**)&data_fft_i, MAX * sizeof(cufftComplex));
-
-	cufftComplex *Output_i;
-	cudaMalloc((void**)&Output_i,   MAX * sizeof(cufftComplex) );
 
 // ----------------------- div variables -----------------------------
 
@@ -270,6 +249,26 @@ int main(int argc, char **argv)
 	FILE *file;
 	char filename[] = "Correlations.dat";
 	file = fopen(filename, "w");
+
+// --------------------- ifft variables -------------------------------
+	cufftHandle plan_i;						
+	cufftComplex *data_fft_i;
+	cufftReal *dev_dat_i;
+
+	int rank_i = -1; 
+	int n_i[] = { MAX };                      
+	int istride_i = 1, ostride_i = 1;   
+	int idist_i = MAX, odist_i = ( MAX / 2 + 1); 
+	int inembed_i[] = { 0 };                   
+	int onembed_i[] = { 0 };                   
+	int batch_i = 1;
+
+	cudaMalloc((void**)&dev_dat_i,  MAX * sizeof(cufftReal) );
+	cudaMalloc((void**)&data_fft_i, MAX * sizeof(cufftComplex));
+
+	cufftComplex *Output_i;
+	cudaMalloc((void**)&Output_i,   MAX * sizeof(cufftComplex) );
+
 // ------------------------------------------------------------------
 
 	cufftComplex *Salida;
@@ -279,8 +278,7 @@ int main(int argc, char **argv)
 
 		Vector<<<DimGrid,DimBlock>>>( Out_fft,  fft_A, begin, end, MAX );																    // define vector
 		Vector<<<DimGrid,DimBlock>>>( Out_conj, Con_A, begin, end, MAX );
-
-		Correlate<<<DimGrid,DimBlock>>>(fft_A, Con_A, Corr_A, nlen ); 																	    // vector element x element
+		VectorMult<<<DimGrid,DimBlock>>>(fft_A, Con_A, Corr_A, nlen ); 																	    // vector element x element
 
 		cudaMemcpy(dev_dat_i, Corr_A,  MAX  * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);												// ifft
 		cufftPlanMany(&plan_i, rank_i, n_i, inembed_i, istride_i, idist_i, onembed_i, ostride_i, odist_i, CUFFT_R2C, batch_i);
@@ -289,15 +287,15 @@ int main(int argc, char **argv)
 
 		Div<<<DimGrid,DimBlock>>>( Output_i, Input_max, MAX, (float)MAX );																			// div element
 
-		cudaMemcpy( Salida, Input_max, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost);
+		cudaMemcpy( Salida, Output_i, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost);
 
 		float maxA = 0;
 		int index =  0;
-
-		for( int i=1; i<MAX; i++ ){
-			if( Salida[i].x > maxA )
-				maxA = Salida[i].x;
+		for( int i=0; i<MAX; i++ ){
+			if( Salida[i].x > maxA ){
+				maxA = Output_i[i].x;
 				index = i;
+			}
 		}
 
 		printf("Power A: %f   index: %i\n", maxA, index);
@@ -306,7 +304,7 @@ int main(int argc, char **argv)
 
 
 		/*
-		cudaMemcpy( Salida, Corr_A, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
+		cudaMemcpy( Salida, Output_i, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
 		for( int it=0; it<500; it++ )
 			printf("%f\n", Salida[it]);
 		*/
@@ -319,7 +317,7 @@ int main(int argc, char **argv)
 			Vector<<<DimGrid,DimBlock>>>( Out_fft,  fft_B, begin2, end2, MAX );																    // define vector
 			Vector<<<DimGrid,DimBlock>>>( Out_conj, Con_B, begin2, end2, MAX );
 
-			Correlate<<<DimGrid,DimBlock>>>(fft_B, Con_B, Corr_B, nlen ); 																	    // vector element x element
+			VectorMult<<<DimGrid,DimBlock>>>(fft_B, Con_B, Corr_B, nlen ); 																	    // vector element x element
 
 			cudaMemcpy(dev_dat_i, Corr_B,  MAX  * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);												// ifft
 			cufftPlanMany(&plan_i, rank_i, n_i, inembed_i, istride_i, idist_i, onembed_i, ostride_i, odist_i, CUFFT_R2C, batch_i);
@@ -342,7 +340,7 @@ int main(int argc, char **argv)
 
 // ----------------------------------------------- Correlation AB --------------------------------------------------------------
 
-			Correlate<<<DimGrid,DimBlock>>>(fft_A, Con_B, Corr_AB, nlen ); 																	    // vector element x element
+			VectorMult<<<DimGrid,DimBlock>>>(fft_A, Con_B, Corr_AB, nlen ); 																	    // vector element x element
 
 			cudaMemcpy(dev_dat_i, Corr_AB,  MAX  * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);												// ifft
 			cufftPlanMany(&plan_i, rank_i, n_i, inembed_i, istride_i, idist_i, onembed_i, ostride_i, odist_i, CUFFT_R2C, batch_i);
