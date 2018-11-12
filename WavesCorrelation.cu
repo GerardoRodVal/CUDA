@@ -107,15 +107,55 @@ __global__ void Div( cufftComplex *Input, cufftComplex *Output, int max, float d
 
 	if (uniqueid < max){
 		Output[uniqueid].x = Input[uniqueid].x/dsor ;
-		//Output[uniqueid].y = Input[uniqueid].y/dsor ;
+		Output[uniqueid].y = Input[uniqueid].y/dsor ;
  	 }
 }
 
 
 
+__global__ void Maximo( cufftComplex *Input, cufftComplex *Output, int max, int pasos )
+{
+	int NumThread = blockDim.x*blockDim.y*blockDim.z;
+	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
+	int BlockId   = (blockIdx.x + blockIdx.y*gridDim.x) + blockIdx.z*(gridDim.x*gridDim.y);
+
+	int uniqueid  = idThread + NumThread*BlockId;
+
+	if( uniqueid >= pasos*0 and uniqueid < pasos*1 ){
+		if( Input[uniqueid].x > Output[0].x ){
+			Output[0].x = Input[uniqueid].x;
+		}
+	}	
+
+	if( uniqueid >= pasos*1 and uniqueid < pasos*2 ){
+		if( Input[uniqueid].x > Output[1].x ){
+			Output[1].x = Input[uniqueid].x;
+		}
+	}
+
+	if( uniqueid >= pasos*2 and uniqueid < pasos*3 ){
+		if( Input[uniqueid].x > Output[2].x ){
+			Output[2].x = Input[uniqueid].x;
+		}
+	}
+
+	if( uniqueid >= pasos*3 and uniqueid < pasos*4 ){
+		if( Input[uniqueid].x > Output[3].x ){
+			Output[3].x = Input[uniqueid].x;
+		}
+	}
+
+
+}
+
+
 
 int main(int argc, char **argv) 
 {
+	cudaEvent_t start, stop;
+	float time;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
 //----------------------------------settings to sac -----------------------------------------
   	int count = 0;
   	int nlen, nerr, max = MAX;
@@ -200,7 +240,11 @@ int main(int argc, char **argv)
 	cufftExecR2C(handle, ComCon_d, ComCon_dO);
 	cudaMemcpy(fft_conj, ComCon_dO, nlen*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
 
-	ComplexConj<<<DimGrid,DimBlock>>>( nlen*count, fft_conj );
+	cudaEventRecord(start, 0);
+	ComplexConj<<< DimGrid,DimBlock >>>( nlen*count, fft_conj );
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+
 
 	cudaMemcpy(Out_conj, fft_conj, (nlen)*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
 
@@ -270,9 +314,8 @@ int main(int argc, char **argv)
 	cudaMalloc((void**)&Output_i,   MAX * sizeof(cufftComplex) );
 
 // ------------------------------------------------------------------
-
-	cufftComplex *Salida;
-	Salida = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
+	cufftComplex *Input_max_H;
+	Input_max_H = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
 
 	for( int A=0; A<count-1; A++ ){
 
@@ -287,27 +330,36 @@ int main(int argc, char **argv)
 
 		Div<<<DimGrid,DimBlock>>>( Output_i, Input_max, MAX, (float)MAX );																			// div element
 
-		cudaMemcpy( Salida, Output_i, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost);
 
+
+
+		cufftComplex *SalidaMAX;
+		cudaMalloc((void**)&SalidaMAX, 4*sizeof(cufftComplex) );
+		Maximo<<<DimGrid,DimBlock>>>( Corr_A, SalidaMAX, MAX, 256 );
+		cufftComplex *Salida = (cufftComplex*)malloc( 4*sizeof(cufftComplex));
+		cudaMemcpy( Salida, SalidaMAX, 4*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
+		for( int it=0; it<4	; it++ )
+			printf("%f\n", Salida[it].x);
+
+
+
+
+		cudaMemcpy( Input_max_H, Corr_A, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost);
 		float maxA = 0;
 		int index =  0;
 		for( int i=0; i<MAX; i++ ){
-			if( Salida[i].x > maxA ){
-				maxA = Output_i[i].x;
+			if( Input_max_H[i].x > maxA ){
+				maxA = Input_max_H[i].x;
 				index = i;
 			}
 		}
+
+
 
 		printf("Power A: %f   index: %i\n", maxA, index);
 
 		//cudaMemcpy( Power_A, maxA, sizeof(float), cudaMemcpyHostToDevice);
 
-
-		/*
-		cudaMemcpy( Salida, Output_i, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
-		for( int it=0; it<500; it++ )
-			printf("%f\n", Salida[it]);
-		*/
 /*
 		int begin2 =  0 + foot;
 		int end2 = MAX + foot;
@@ -396,6 +448,11 @@ int main(int argc, char **argv)
 	
 	cudaDeviceSynchronize();
 	cudaDeviceReset();
+	
+	cudaEventElapsedTime(&time, start, stop);
+	printf("Time for the kernel: %f ms\n", time);
+
+
 	return (EXIT_SUCCESS);
 
 }
