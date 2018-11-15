@@ -1,4 +1,4 @@
-#include <algorithm>
+
 #include <stdio.h>
 #include <dirent.h>
 #include <string.h>
@@ -63,7 +63,8 @@ __global__ void ComplexConj( long int nelem, cufftComplex *array )
 	int uniqueid  = idThread + NumThread*BlockId;
 
 	if (uniqueid < nelem){
-		array[uniqueid].y = array[uniqueid].y*-1;
+		array[uniqueid].x = array[uniqueid].x * array[uniqueid].x;
+		array[uniqueid].y = array[uniqueid].y * array[uniqueid].y;
  	 }
 }
 
@@ -121,31 +122,30 @@ __global__ void Maximo( cufftComplex *Input, cufftComplex *Output, int max, int 
 
 	int uniqueid  = idThread + NumThread*BlockId;
 
-	if( uniqueid >= pasos*0 and uniqueid < pasos*1 ){
-		if( Input[uniqueid].x > Output[0].x ){
-			Output[0].x = Input[uniqueid].x;
-		}
-	}	
-
-	if( uniqueid >= pasos*1 and uniqueid < pasos*2 ){
+	if( uniqueid > pasos*0 and uniqueid < pasos*1 ){
 		if( Input[uniqueid].x > Output[1].x ){
 			Output[1].x = Input[uniqueid].x;
-		}
+		}	
 	}
 
-	if( uniqueid >= pasos*2 and uniqueid < pasos*3 ){
+	if( uniqueid > pasos*1 and uniqueid < pasos*2 ){
 		if( Input[uniqueid].x > Output[2].x ){
 			Output[2].x = Input[uniqueid].x;
-		}
+		}	
 	}
 
-	if( uniqueid >= pasos*3 and uniqueid < pasos*4 ){
+	if( uniqueid > pasos*2 and uniqueid < pasos*3 ){
 		if( Input[uniqueid].x > Output[3].x ){
 			Output[3].x = Input[uniqueid].x;
-		}
+		}	
 	}
 
-
+	if( uniqueid > pasos*3 and uniqueid < pasos*4 ){
+		if( Input[uniqueid].x > Output[4].x ){
+			Output[4].x = Input[uniqueid].x;
+		}	
+	}
+	
 }
 
 
@@ -323,6 +323,7 @@ int main(int argc, char **argv)
 		Vector<<<DimGrid,DimBlock>>>( Out_conj, Con_A, begin, end, MAX );
 		VectorMult<<<DimGrid,DimBlock>>>(fft_A, Con_A, Corr_A, nlen ); 																	    // vector element x element
 
+
 		cudaMemcpy(dev_dat_i, Corr_A,  MAX  * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);												// ifft
 		cufftPlanMany(&plan_i, rank_i, n_i, inembed_i, istride_i, idist_i, onembed_i, ostride_i, odist_i, CUFFT_R2C, batch_i);
 		cufftExecR2C(plan_i, dev_dat_i, data_fft_i);
@@ -353,8 +354,6 @@ int main(int argc, char **argv)
 				index = i;
 			}
 		}
-
-
 
 		printf("Power A: %f   index: %i\n", maxA, index);
 
