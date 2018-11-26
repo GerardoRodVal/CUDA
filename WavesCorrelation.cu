@@ -1,4 +1,4 @@
-
+#include <algorithm>
 #include <stdio.h>
 #include <dirent.h>
 #include <string.h>
@@ -14,11 +14,11 @@ extern "C"
 	#include <sac.h>
 }
 
+#define Nsac       		2
 #define GRID_DIMENSION  3
 #define BLOCK_DIMENSION 3
-#define COMP (batch*(batch-1))/2
-
 #define MAX 1024
+
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 
 
@@ -30,8 +30,6 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
       if (abort) exit(code);
    }
 }
-
-
 
 void check_gpu_card_type()
 {
@@ -53,8 +51,7 @@ void check_gpu_card_type()
   }
 }
 
-
-__global__ void ComplexConj( long int nelem, cufftComplex *array )
+__global__ void Correlate( cufftComplex *Input, cufftComplex *Output, int xlen )
 {
 	int NumThread = blockDim.x*blockDim.y*blockDim.z;
 	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
@@ -62,28 +59,14 @@ __global__ void ComplexConj( long int nelem, cufftComplex *array )
 
 	int uniqueid  = idThread + NumThread*BlockId;
 
-	if (uniqueid < nelem){
-		array[uniqueid].x = array[uniqueid].x * array[uniqueid].x;
-		array[uniqueid].y = array[uniqueid].y * array[uniqueid].y;
- 	 }
+	/*
+	if( uniqueid < xlen ){
+		Output[uniqueid].x = Input[uniqueid].x;
+		Output[uniqueid].y = Input[uniqueid].y;
+	}*/
 }
 
-
-__global__ void Vector( cufftComplex *vectorIn, cufftComplex *Output, int inicio, int final, int size)
-{
-	int NumThread = blockDim.x*blockDim.y*blockDim.z;
-	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
-	int BlockId   = (blockIdx.x + blockIdx.y*gridDim.x) + blockIdx.z*(gridDim.x*gridDim.y);
-
-	int uniqueid  = idThread + NumThread*BlockId;
-
-	if( uniqueid >= inicio and uniqueid < final ){
-		Output[uniqueid].x = vectorIn[uniqueid].x;
-		Output[uniqueid].y = vectorIn[uniqueid].y;
-	}
-}
-
-__global__ void VectorMult( cufftComplex *s1, cufftComplex *s2, cufftComplex *Output, int xlen )
+__global__ void VectorMult( cufftComplex *Input, cufftComplex *Output, int xlen, int npts )
 {
 	int NumThread = blockDim.x*blockDim.y*blockDim.z;
 	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
@@ -92,71 +75,27 @@ __global__ void VectorMult( cufftComplex *s1, cufftComplex *s2, cufftComplex *Ou
 	int uniqueid  = idThread + NumThread*BlockId;
 
 	if( uniqueid < xlen ){
-		Output[uniqueid].x = s1[uniqueid].x * s2[uniqueid].x ;
-		Output[uniqueid].y = s1[uniqueid].y * s2[uniqueid].y ;
+		Output[uniqueid].x = (Input[uniqueid].x * Input[uniqueid].x + Input[uniqueid].y * Input[uniqueid].y)/npts;
+		Output[uniqueid].y = 0;
 	}
 }
-
-
-__global__ void Div( cufftComplex *Input, cufftComplex *Output, int max, float dsor )
-{
-	int NumThread = blockDim.x*blockDim.y*blockDim.z;
-	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
-	int BlockId   = (blockIdx.x + blockIdx.y*gridDim.x) + blockIdx.z*(gridDim.x*gridDim.y);
-
-	int uniqueid  = idThread + NumThread*BlockId;
-
-	if (uniqueid < max){
-		Output[uniqueid].x = Input[uniqueid].x/dsor ;
-		Output[uniqueid].y = Input[uniqueid].y/dsor ;
- 	 }
-}
-
-
-
-__global__ void Maximo( cufftComplex *Input, cufftComplex *Output, int max, int pasos )
-{
-	int NumThread = blockDim.x*blockDim.y*blockDim.z;
-	int idThread  = (threadIdx.x + threadIdx.y*blockDim.x) + threadIdx.z*(blockDim.x*blockDim.y);
-	int BlockId   = (blockIdx.x + blockIdx.y*gridDim.x) + blockIdx.z*(gridDim.x*gridDim.y);
-
-	int uniqueid  = idThread + NumThread*BlockId;
-
-	if( uniqueid > pasos*0 and uniqueid < pasos*1 ){
-		if( Input[uniqueid].x > Output[1].x ){
-			Output[1].x = Input[uniqueid].x;
-		}	
-	}
-
-	if( uniqueid > pasos*1 and uniqueid < pasos*2 ){
-		if( Input[uniqueid].x > Output[2].x ){
-			Output[2].x = Input[uniqueid].x;
-		}	
-	}
-
-	if( uniqueid > pasos*2 and uniqueid < pasos*3 ){
-		if( Input[uniqueid].x > Output[3].x ){
-			Output[3].x = Input[uniqueid].x;
-		}	
-	}
-
-	if( uniqueid > pasos*3 and uniqueid < pasos*4 ){
-		if( Input[uniqueid].x > Output[4].x ){
-			Output[4].x = Input[uniqueid].x;
-		}	
-	}
-	
-}
-
-
 
 int main(int argc, char **argv) 
 {
-	cudaEvent_t start, stop;
-	float time;
+//---------------------------------------------Time event-------------------------------------------------------
+	cudaEvent_t start;
+	cudaEvent_t stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
-//----------------------------------settings to sac -----------------------------------------
+	cudaEventRecord( start, 0 );
+//------------------------------------------ Kernel invocation--------------------------------------------------
+	int grid_size  = GRID_DIMENSION;
+    int block_size = BLOCK_DIMENSION;
+
+    dim3 DimGrid(grid_size, grid_size, grid_size);
+    dim3 DimBlock(block_size, block_size, block_size);
+
+//--------------------------------------------settings to sac --------------------------------------------------
   	int count = 0;
   	int nlen, nerr, max = MAX;
   	char kname[31];
@@ -164,11 +103,10 @@ int main(int argc, char **argv)
 	float yarray[MAX];
 	float beg, del;
 
-	data = (float *)malloc( 20*MAX*sizeof(float));
+	data = (float *)malloc( Nsac*MAX*sizeof(float));
 
 	check_gpu_card_type();
 
-// reading sac files
 	struct dirent *de;  
 	DIR *dr = opendir(".");								//open currently directory
     while ((de = readdir(dr)) != NULL)
@@ -189,269 +127,81 @@ int main(int argc, char **argv)
 		}
 	}
 
-// --------------------------------------cuda_fft---------------------------------------------------
-	cufftHandle plan;							// settings plan to fft
-	cufftComplex *data_fft;
-	cufftComplex *Out_fft;
-	cufftReal *dev_dat;
+// ---------------------------------------------fft_settings---------------------------------------------------
+	int DATASIZE = MAX;
+	int size_fft = DATASIZE / 2 + 1;
+  	int batch    = count;    
 
-	int rank = 1;                            
-  	int n[] = { nlen };                      
-  	int istride = 1, ostride = 1;            
-  	int idist = MAX, odist = ( nlen / 2 + 1); 
-  	int inembed[] = { 0 };                   
-  	int onembed[] = { 0 };                   
-  	int size_fft = (nlen );
-  	int batch = count;   
+// -----------------------------------------------cuda_fft-----------------------------------------------------
+	cufftHandle handle_forward;
+  	cufftReal *Input_fft;
+  	cufftComplex *Output_fft;
+	cudaMalloc((void**)&Input_fft,  DATASIZE * batch * sizeof(cufftReal) );
+	cudaMalloc((void**)&Output_fft, size_fft * batch * sizeof(cufftComplex) );
 
-	cudaMalloc((void**)&dev_dat,   size_fft*count*sizeof(cufftReal) );
-	cudaMalloc((void**)&data_fft,  size_fft*count*sizeof(cufftComplex) );
-	cudaMalloc((void**)&Out_fft,  size_fft*count*sizeof(cufftComplex) );
-
-	gpuErrchk(cudaMemcpy(dev_dat, data, MAX*count*sizeof(float), cudaMemcpyHostToDevice));
-								
-	cufftPlanMany(&plan, rank, n, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batch);
-	cufftExecR2C(plan, dev_dat, data_fft);
-
-	cudaMemcpy(Out_fft, data_fft, size_fft*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
+	cudaMemcpy(Input_fft, data, DATASIZE * batch * sizeof(float), cudaMemcpyHostToDevice);
+	cufftPlan1d(&handle_forward, DATASIZE, CUFFT_R2C, batch);
+	cufftExecR2C(handle_forward, Input_fft, Output_fft);
 	
-//------------------------------------Complex conjugate--------------------------------------------------------
-	int grid_size  = GRID_DIMENSION;
-    int block_size = BLOCK_DIMENSION;
+//---------------------------------------------- Correlation --------------------------------------------------
+	cufftComplex *Corr;
+	cudaMalloc((void**)&Corr,  size_fft * batch * sizeof(cufftComplex));
+	VectorMult<<<DimGrid,DimBlock>>>(Output_fft, Corr, size_fft*batch, size_fft ); 																	    // vector element x element	
 
-    dim3 DimGrid(grid_size, grid_size, grid_size);
-    dim3 DimBlock(block_size, block_size, block_size);
+	cufftComplex *Input_i;
+	cudaMalloc((void**)&Input_i,  size_fft * batch * sizeof(cufftComplex));
+	Correlate<<<DimGrid,DimBlock>>>(Corr, Input_i, size_fft*batch ); 				//Todos contra todos
 
-    cufftHandle handle;
+//------------------------------------------------cuda_fft_i---------------------------------------------------
+	cufftHandle handle_inverse;
+	cufftReal *Output_i;
+	cudaMalloc((void**)&Output_i,  DATASIZE * batch * sizeof(cufftReal) );
 
-    cufftReal *ComCon_d;
-	cufftComplex *ComCon_dO;
-	cufftComplex *fft_conj;
-	cufftComplex *Out_conj; 
+	cufftPlan1d( &handle_inverse, DATASIZE, CUFFT_C2R, batch);
+	cufftExecC2R(handle_inverse, Corr, Output_i);
 
-	cudaMalloc((void**)&ComCon_d,  nlen * count * sizeof(cufftReal));
-	cudaMalloc((void**)&ComCon_dO, nlen * count * sizeof(cufftComplex));
-    cudaMalloc((void**)&fft_conj,  nlen * count * sizeof(cufftComplex));
-    cudaMalloc((void**)&Out_conj,  nlen * count * sizeof(cufftComplex));
+	cufftReal *XCorr = (cufftReal*)malloc((DATASIZE) * batch * sizeof(cufftReal)); 
+	cudaMemcpy(XCorr, Output_i, DATASIZE * batch * sizeof(cufftReal), cudaMemcpyDeviceToHost);
+    for (int i=0; i<batch; i++)
+		printf(" hostOutputPowerT[%d] = %f\n",i, XCorr[DATASIZE*i]/2);
 
-	cudaMemcpy(ComCon_d, data, nlen*count*sizeof(cufftReal), cudaMemcpyHostToDevice);
-
-    cufftPlanMany(&handle, rank, n, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batch);
-	cufftExecR2C(handle, ComCon_d, ComCon_dO);
-	cudaMemcpy(fft_conj, ComCon_dO, nlen*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
-
-	cudaEventRecord(start, 0);
-	ComplexConj<<< DimGrid,DimBlock >>>( nlen*count, fft_conj );
-	cudaEventRecord(stop, 0);
+	cudaEventRecord( stop, 0) ;
 	cudaEventSynchronize(stop);
+	float elapsedTime;
+	cudaEventElapsedTime( &elapsedTime, start, stop);
+	printf("\n Time: %f ms\n",elapsedTime);
 
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
 
-	cudaMemcpy(Out_conj, fft_conj, (nlen)*count*sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
-
-//-------------------------------------------- Correlation --------------------------------------------------------
-//----------------------------  Variables  ------------------------------
-	cufftComplex *fft_A;
-	cufftComplex *fft_B;
-
-	cudaMalloc((void**)&fft_A, MAX * sizeof(cufftComplex));
-	cudaMalloc((void**)&fft_B, MAX * sizeof(cufftComplex));
-	
-	cufftComplex *Con_A;
-	cufftComplex *Con_B;
-
-	cudaMalloc((void**)&Con_A, MAX * sizeof(cufftComplex));
-	cudaMalloc((void**)&Con_B, MAX * sizeof(cufftComplex));
-
-	cufftComplex *Corr_A;
-	cufftComplex *Corr_B;
-	cufftComplex *Corr_AB;
-
-	cudaMalloc((void**)&Corr_A,  MAX * sizeof(cufftComplex));
-	cudaMalloc((void**)&Corr_B,  MAX * sizeof(cufftComplex));
-	cudaMalloc((void**)&Corr_AB, MAX * sizeof(cufftComplex));
-
-	float *Power_A;
-	float *Power_B;
-	float *CC;
-
-	cudaMalloc((void**)&Power_A, sizeof(float));
-	cudaMalloc((void**)&Power_B, sizeof(float));
-	cudaMalloc((void**)&CC, sizeof(float));
-
-// ----------------------- div variables -----------------------------
-
-	cufftComplex *Input_max;
-	cudaMalloc((void**)&Input_max,  MAX * sizeof(cufftComplex) );
-
-// ----------------------- General variables -------------------------
-
-	int begin = 0;
-	int end = MAX;
-	int foot = MAX;
-	int n3 = 1;
-
-	FILE *file;
-	char filename[] = "Correlations.dat";
-	file = fopen(filename, "w");
-
-// --------------------- ifft variables -------------------------------
-	cufftHandle plan_i;						
-	cufftComplex *data_fft_i;
-	cufftReal *dev_dat_i;
-
-	int rank_i = -1; 
-	int n_i[] = { MAX };                      
-	int istride_i = 1, ostride_i = 1;   
-	int idist_i = MAX, odist_i = ( MAX / 2 + 1); 
-	int inembed_i[] = { 0 };                   
-	int onembed_i[] = { 0 };                   
-	int batch_i = 1;
-
-	cudaMalloc((void**)&dev_dat_i,  MAX * sizeof(cufftReal) );
-	cudaMalloc((void**)&data_fft_i, MAX * sizeof(cufftComplex));
-
-	cufftComplex *Output_i;
-	cudaMalloc((void**)&Output_i,   MAX * sizeof(cufftComplex) );
-
-// ------------------------------------------------------------------
-	cufftComplex *Input_max_H;
-	Input_max_H = (cufftComplex*)malloc( MAX * sizeof(cufftComplex));
-
-	for( int A=0; A<count-1; A++ ){
-
-		Vector<<<DimGrid,DimBlock>>>( Out_fft,  fft_A, begin, end, MAX );																    // define vector
-		Vector<<<DimGrid,DimBlock>>>( Out_conj, Con_A, begin, end, MAX );
-		VectorMult<<<DimGrid,DimBlock>>>(fft_A, Con_A, Corr_A, nlen ); 																	    // vector element x element
-
-
-		cudaMemcpy(dev_dat_i, Corr_A,  MAX  * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);												// ifft
-		cufftPlanMany(&plan_i, rank_i, n_i, inembed_i, istride_i, idist_i, onembed_i, ostride_i, odist_i, CUFFT_R2C, batch_i);
-		cufftExecR2C(plan_i, dev_dat_i, data_fft_i);
-		cudaMemcpy(Output_i, data_fft_i, MAX * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
-
-		Div<<<DimGrid,DimBlock>>>( Output_i, Input_max, MAX, (float)MAX );																			// div element
-
-
-
-
-		cufftComplex *SalidaMAX;
-		cudaMalloc((void**)&SalidaMAX, 4*sizeof(cufftComplex) );
-		Maximo<<<DimGrid,DimBlock>>>( Corr_A, SalidaMAX, MAX, 256 );
-		cufftComplex *Salida = (cufftComplex*)malloc( 4*sizeof(cufftComplex));
-		cudaMemcpy( Salida, SalidaMAX, 4*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
-		for( int it=0; it<4	; it++ )
-			printf("%f\n", Salida[it].x);
-
-
-
-
-		cudaMemcpy( Input_max_H, Corr_A, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost);
-		float maxA = 0;
-		int index =  0;
-		for( int i=0; i<MAX; i++ ){
-			if( Input_max_H[i].x > maxA ){
-				maxA = Input_max_H[i].x;
-				index = i;
-			}
-		}
-
-		printf("Power A: %f   index: %i\n", maxA, index);
-
-		//cudaMemcpy( Power_A, maxA, sizeof(float), cudaMemcpyHostToDevice);
-
-/*
-		int begin2 =  0 + foot;
-		int end2 = MAX + foot;
-
-		for( int y=0; y<batch-n3; y++ ){
-
-			Vector<<<DimGrid,DimBlock>>>( Out_fft,  fft_B, begin2, end2, MAX );																    // define vector
-			Vector<<<DimGrid,DimBlock>>>( Out_conj, Con_B, begin2, end2, MAX );
-
-			VectorMult<<<DimGrid,DimBlock>>>(fft_B, Con_B, Corr_B, nlen ); 																	    // vector element x element
-
-			cudaMemcpy(dev_dat_i, Corr_B,  MAX  * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);												// ifft
-			cufftPlanMany(&plan_i, rank_i, n_i, inembed_i, istride_i, idist_i, onembed_i, ostride_i, odist_i, CUFFT_R2C, batch_i);
-			cufftExecR2C(plan_i, dev_dat_i, data_fft_i);
-			cudaMemcpy(Output_i, data_fft_i, MAX * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
-
-			Div<<<DimGrid,DimBlock>>>( Output_i, Input_max, MAX, MAX );																			// div element
-
-			cudaMemcpy( Input_max_H, Input_max, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost ); 
-
-			float maxB;
-			maxB = Input_max_H[0].x;
-
-			for( int i=1; i<MAX; i++ ){
-				if( maxB < Input_max_H[i].x )
-					maxB = Input_max_H[i].x;
-			}
-
-			cudaMemcpy( Power_B, &maxB, sizeof(float), cudaMemcpyHostToDevice);
-
-// ----------------------------------------------- Correlation AB --------------------------------------------------------------
-
-			VectorMult<<<DimGrid,DimBlock>>>(fft_A, Con_B, Corr_AB, nlen ); 																	    // vector element x element
-
-			cudaMemcpy(dev_dat_i, Corr_AB,  MAX  * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);												// ifft
-			cufftPlanMany(&plan_i, rank_i, n_i, inembed_i, istride_i, idist_i, onembed_i, ostride_i, odist_i, CUFFT_R2C, batch_i);
-			cufftExecR2C(plan_i, dev_dat_i, data_fft_i);
-			cudaMemcpy(Output_i, data_fft_i, MAX * sizeof(cufftComplex), cudaMemcpyDeviceToDevice);
-
-			//float npts = MAX*sqrt(Power_A*Power_B);
-			Div<<<DimGrid,DimBlock>>>( Output_i, Input_max, MAX, MAX );																	   // div element
-
-			cudaMemcpy( Input_max_H, Input_max, MAX*sizeof(cufftComplex), cudaMemcpyDeviceToHost ); 
-
-			float maxAB;
-			maxAB = Input_max_H[0].x;
-
-			for( int i=1; i<MAX; i++ ){
-				if( maxAB < Input_max_H[i].x )
-					maxAB = Input_max_H[i].x;
-			}
-
-			cudaMemcpy( CC, &maxAB, sizeof(float), cudaMemcpyHostToDevice);
-
-			//if( CC > 0.6 )
-			//	fprintf(file, "Waveform1 =     Waveform2 =      CC = %f \n", CC);
-			printf("%.4f %.4f  %.4f\n", maxA, maxB, maxAB);
-
-			begin2 += MAX;
-			end2 += MAX;
-		}
-*/
-		n3 += 1;
-		begin += MAX;
-		end += MAX;
-		foot += MAX;
-	}
-
-	cufftDestroy(handle);
-	cudaFree(fft_conj);
-	cudaFree(Out_conj);
-	cudaFree(ComCon_dO);
-	cudaFree(ComCon_d);
-
-	cufftDestroy(plan);
-	cudaFree(Out_fft);
-	cudaFree(dev_dat);
-	cudaFree(data_fft);
-
-	cufftDestroy(plan_i);
+	cufftDestroy(handle_inverse);
 	cudaFree(Output_i);
-	cudaFree(dev_dat_i);
-	cudaFree(data_fft_i);
+	cudaFree(Corr);
+
+	cufftDestroy(handle_forward);
+	cudaFree(Input_fft);
+	cudaFree(Output_fft);
 
 	free(data);
-	
+
 	cudaDeviceSynchronize();
 	cudaDeviceReset();
-	
-	cudaEventElapsedTime(&time, start, stop);
-	printf("Time for the kernel: %f ms\n", time);
-
 
 	return (EXIT_SUCCESS);
-
 }
+
+
+// hostOutputPowerT[0] = 771441344.000000
+// hostOutputPowerT[1] = 192102768.000000
+
+
+/*
+	cufftComplex *print = (cufftComplex*)malloc( MAX*count*sizeof(cufftComplex));
+	cudaMemcpy( print, Corr, MAX*count*sizeof(cufftComplex), cudaMemcpyDeviceToHost );
+	FILE *file;
+	char filename[] = "Graph.dat";
+	file = fopen(filename, "w");
+	int l;
+	for( l = 0; l<MAX*count; l++ )
+		fprintf(file, "%f    %f\n", print[l].x, print[l].y);
+*/
