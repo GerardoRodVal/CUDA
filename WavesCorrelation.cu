@@ -70,7 +70,7 @@ __global__ void Correlation( cufftComplex *Input, cufftComplex *Output, int batc
     int ThreadPerBlock  = blockDim.x*blockDim.y*blockDim.z;
     int index = threadIdx.x + ThreadPerBlock*blockIdx.x;
 
-    //printf("  %i  %i  %i  %i+%i*%i \n",  index+begin, index, index+batch_id*size, index, batch_id, size );
+    printf("  %i  %i  %i  %i+%i*%i \n",  index+begin, index, index+batch_id*size, index, batch_id, size );
 
     Output[ index+begin ].x = Input[ index ].x*Input[ index + batch_id*size ].x  + Input[index].y*Input[ index + batch_id*size ].y;
     Output[ index+begin ].y = Input[ index ].x*Input[ index + batch_id*size ].y  - Input[index].y*Input[ index + batch_id*size ].x;
@@ -81,8 +81,8 @@ __global__ void Coherence( cufftComplex *Input, cufftComplex *Output, int batch_
     int ThreadPerBlock  = blockDim.x*blockDim.y*blockDim.z;
     int index = threadIdx.x+(blockIdx.x*ThreadPerBlock);
 
-    Output[ index+begin ].x = powf(abs( Input[ index ].x * Input[ index+batch_id*size ].x), 2) /    Input[ index ].x * Input[ index+batch_id*size ].x;
-    Output[ index+begin ].y = powf(abs( Input[ index ].y * Input[ index+batch_id*size ].y*-1), 2) / Input[ index ].y * Input[ index+batch_id*size ].y;
+    Output[ index+begin ].x =  Input[ index ].x * Input[ index+batch_id*size ].x - Input[ index ].x * Input[ index+batch_id*size ].y;
+    Output[ index+begin ].y =  Input[ index ].y * Input[ index+batch_id*size ].x - Input[ index ].y * Input[ index+batch_id*size ].y;
 }
 
 int main(int argc, char **argv) 
@@ -141,7 +141,7 @@ int main(int argc, char **argv)
 // ---------------------------------------------fft_settings---------------------------------------------------
 
     int DATASIZE = MAX;
-    int size_fft = DATASIZE / 2 ;
+    int size_fft = DATASIZE / 2 + 1;
     int batch = count;    
     cufftHandle handle_forward;
     cufftReal    *Input_fft;
@@ -219,7 +219,7 @@ int main(int argc, char **argv)
     float max_cohr[BATCH];
     for (int i=0; i < BATCH; i++){
         for (int j =0; j < size_fft; j++){
-            if (Out_Coh[i*size_fft + j] > max_corr[j]){
+             if (Out_Coh[i*size_fft + j] > max_cohr[i]){
                 max_cohr[i] = Out_Coh[i*size_fft + j];
             }
         }
@@ -236,7 +236,7 @@ int main(int argc, char **argv)
         for( int j=B; j<E; j++ ){
             //printf("%i  %i \n", id_v1, id_v2);
             printf("\n with file number %d Correlation = %f \n", id_v2, max_corr[j]/(size_fft*sqrt(Out_Power[id_v1*DATASIZE]*Out_Power[id_v2*DATASIZE])) );
-            //printf("                      Coherence = %f \n", max_cohr[j]/DATASIZE);
+            printf("                      Coherence = %f \n", max_cohr[j]/(Out_Power[id_v1*DATASIZE]*Out_Power[id_v2*DATASIZE]) );
             id_v1 += 1;
             id_v2 += 1;
         }
