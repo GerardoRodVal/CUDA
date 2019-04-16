@@ -16,7 +16,7 @@ extern "C"
 
 #define Nsac            5
 #define MAX             1024
-#define GRID_DIMENSION  5
+#define GRID_DIMENSION  32
 #define BLOCK_DIMENSION 8
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
@@ -70,7 +70,7 @@ __global__ void Correlation( cufftComplex *Input, cufftComplex *Output, int batc
     int ThreadPerBlock  = blockDim.x*blockDim.y*blockDim.z;
     int index = threadIdx.x + ThreadPerBlock*blockIdx.x;
 
-    printf("  %i  %i  %i  %i+%i*%i \n",  index+begin, index, index+batch_id*size, index, batch_id, size );
+    //printf("  %i  %i  %i  %i+%i*%i \n",  index+begin, index, index+batch_id*size, index, batch_id, size );
 
     Output[ index+begin ].x = Input[ index ].x*Input[ index + batch_id*size ].x  + Input[index].y*Input[ index + batch_id*size ].y;
     Output[ index+begin ].y = Input[ index ].x*Input[ index + batch_id*size ].y  - Input[index].y*Input[ index + batch_id*size ].x;
@@ -79,13 +79,13 @@ __global__ void Correlation( cufftComplex *Input, cufftComplex *Output, int batc
 __global__ void Coherence( cufftComplex *Input, cufftComplex *Output, int batch_id, int size, int begin )
 {
     int ThreadPerBlock  = blockDim.x*blockDim.y*blockDim.z;
-    int index = threadIdx.x+(blockIdx.x*ThreadPerBlock);
+    int index = threadIdx.x + blockIdx.x*ThreadPerBlock;
 
     Output[ index+begin ].x =  Input[ index ].x * Input[ index+batch_id*size ].x - Input[ index ].x * Input[ index+batch_id*size ].y;
-    Output[ index+begin ].y =  Input[ index ].y * Input[ index+batch_id*size ].x - Input[ index ].y * Input[ index+batch_id*size ].y;
+    Output[ index+begin ].y =  Input[ index ].x * Input[ index+batch_id*size ].y - Input[ index ].y * Input[ index+batch_id*size ].x;
 }
 
-int main(int argc, char **argv) 
+int main(int argc, char **argv)
 {
 //---------------------------------------------Time event-------------------------------------------------------
 
@@ -141,7 +141,7 @@ int main(int argc, char **argv)
 // ---------------------------------------------fft_settings---------------------------------------------------
 
     int DATASIZE = MAX;
-    int size_fft = DATASIZE / 2 + 1;
+    int size_fft = DATASIZE / 2 +1;
     int batch = count;    
     cufftHandle handle_forward;
     cufftReal    *Input_fft;
@@ -150,7 +150,7 @@ int main(int argc, char **argv)
 // -----------------------------------------------cuda_fft-----------------------------------------------------
 
     cudaMalloc((void**)&Input_fft,  DATASIZE * batch * sizeof(cufftReal) );
-    cudaMalloc((void**)&Output_fft, size_fft * batch * sizeof(cufftComplex) );
+    cudaMalloc((void**)&Output_fft, DATASIZE * batch * sizeof(cufftComplex) );
 
     cudaMemcpy(Input_fft, data, DATASIZE * batch * sizeof(cufftReal), cudaMemcpyHostToDevice);
     cufftPlan1d(&handle_forward, DATASIZE, CUFFT_R2C, batch);
@@ -168,30 +168,32 @@ int main(int argc, char **argv)
     int Begin = 0;
 
     cufftComplex *Correlation_Out;
-    cudaMalloc((void**)&Correlation_Out,  size_fft * BATCH * sizeof(cufftComplex));
+    cudaMalloc((void**)&Correlation_Out,  size_fft * BATCH * sizeof(cufftComplex) );
 
     cufftComplex *Coherence_Out;
     cudaMalloc((void**)&Coherence_Out,    size_fft * BATCH * sizeof(cufftComplex) );
 
     for( int floor=1; floor<batch; floor++ ){
-        Correlation<<< batch-floor, size_fft >>>(Output_fft, Correlation_Out, floor, size_fft, Begin); 
-        Coherence  <<< batch-floor, size_fft >>>(Output_fft, Coherence_Out,   floor, size_fft, Begin); 
+        Correlation<<< batch-floor, size_fft >>>(Output_fft, Correlation_Out, floor, size_fft, Begin);
+        Coherence  <<< batch-floor, size_fft >>>(Output_fft, Coherence_Out,   floor, size_fft, Begin);
         Begin += size_fft*(batch-floor);
     }
 
 // ----------------------------------------------- cuda_fft_i ---------------------------------------------------
 
     cufftHandle handle_inverse;
+    cufftHandle handle_inverse2;
    
     cufftReal *Power_Out_i;
     cufftReal *Correlation_out_i;
     cufftReal *Coherence_out_i;
 
     cudaMalloc((void**)&Power_Out_i,       DATASIZE * batch * sizeof(cufftReal) );
-    cudaMalloc((void**)&Correlation_out_i, DATASIZE * BATCH * sizeof(cufftReal) );
-    cudaMalloc((void**)&Coherence_out_i,   DATASIZE * BATCH * sizeof(cufftReal) );
+    cudaMalloc((void**)&Correlation_out_i, size_fft * BATCH * sizeof(cufftReal) );
+    cudaMalloc((void**)&Coherence_out_i,   size_fft * BATCH * sizeof(cufftReal) );
 
     cufftPlan1d( &handle_inverse, DATASIZE, CUFFT_C2R, batch);
+    cufftPlan1d( &handle_inverse2, size_fft, CUFFT_C2R, batch);
 
     cufftExecC2R(handle_inverse, Power_Out, Power_Out_i);
     cufftExecC2R(handle_inverse, Correlation_Out, Correlation_out_i);
@@ -200,18 +202,18 @@ int main(int argc, char **argv)
 // ------------------------------------------------ Print Results ----------------------------------------------------
 
     cufftReal *Out_Power = (cufftReal*)malloc( DATASIZE * batch * sizeof(cufftReal));
-    cufftReal *Out_Corr  = (cufftReal*)malloc( DATASIZE * BATCH * sizeof(cufftReal)); 
-    cufftReal *Out_Coh   = (cufftReal*)malloc( DATASIZE * BATCH * sizeof(cufftReal)); 
+    cufftReal *Out_Corr  = (cufftReal*)malloc( size_fft * BATCH * sizeof(cufftReal)); 
+    cufftReal *Out_Coh   = (cufftReal*)malloc( size_fft * BATCH * sizeof(cufftReal)); 
  
     cudaMemcpy(Out_Power, Power_Out_i,  DATASIZE * batch * sizeof(cufftReal), cudaMemcpyDeviceToHost);
-    cudaMemcpy(Out_Corr,  Correlation_out_i, DATASIZE * BATCH * sizeof(cufftReal), cudaMemcpyDeviceToHost);
-    cudaMemcpy(Out_Coh,   Coherence_out_i, DATASIZE * BATCH * sizeof(cufftReal), cudaMemcpyDeviceToHost);
+    cudaMemcpy(Out_Corr,  Correlation_out_i, size_fft * BATCH * sizeof(cufftReal), cudaMemcpyDeviceToHost);
+    cudaMemcpy(Out_Coh,   Coherence_out_i, size_fft * BATCH * sizeof(cufftReal), cudaMemcpyDeviceToHost);
 
     float max_corr[BATCH];
     for (int i=0; i < BATCH; i++){
-        for (int j =0; j < size_fft; j++){
-            if (Out_Corr[i*size_fft + j] > max_corr[i]){
-                max_corr[i] = Out_Corr[i*size_fft + j];
+        for (int j =0; j < DATASIZE; j++){
+            if (Out_Corr[i*DATASIZE + j] > max_corr[i]){
+                max_corr[i] = Out_Corr[i*DATASIZE + j];
             }
         }
     }
@@ -219,7 +221,7 @@ int main(int argc, char **argv)
     float max_cohr[BATCH];
     for (int i=0; i < BATCH; i++){
         for (int j =0; j < size_fft; j++){
-             if (Out_Coh[i*size_fft + j] > max_cohr[i]){
+            if (Out_Coh[i*size_fft + j] > max_cohr[i]){
                 max_cohr[i] = Out_Coh[i*size_fft + j];
             }
         }
@@ -235,7 +237,7 @@ int main(int argc, char **argv)
         printf("\n--------------- Power %f of file %d --------------\n", Out_Power[i*DATASIZE]/2000, i );
         for( int j=B; j<E; j++ ){
             //printf("%i  %i \n", id_v1, id_v2);
-            printf("\n with file number %d Correlation = %f \n", id_v2, max_corr[j]/(size_fft*sqrt(Out_Power[id_v1*DATASIZE]*Out_Power[id_v2*DATASIZE])) );
+            printf("\n with file number %d Correlation = %f \n", id_v2, 2*max_corr[j]/(DATASIZE*sqrt(Out_Power[id_v1*DATASIZE]*Out_Power[id_v2*DATASIZE])) );
             printf("                      Coherence = %f \n", max_cohr[j]/(Out_Power[id_v1*DATASIZE]*Out_Power[id_v2*DATASIZE]) );
             id_v1 += 1;
             id_v2 += 1;
@@ -253,7 +255,7 @@ int main(int argc, char **argv)
 
     cudaEventRecord( stop, 0) ;
     cudaEventSynchronize(stop);
-    float elapsedTime;
+    float elapsedTime; 
     cudaEventElapsedTime( &elapsedTime, start, stop);
     printf("Time: %f milliseconds\n",elapsedTime/1000);
     printf("\n");
